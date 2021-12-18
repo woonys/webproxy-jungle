@@ -108,3 +108,128 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   Rio_writen(fd, body, strlen(body));  
 }
 
+void read_requesthdrs(rio_t *rp)
+{
+  char buf[MAXLINE];
+
+  Rio_readlineb(rp, buf, MAXLINE);
+  while(strcmp(buf, "\r\n")) {
+    Rio_readlineb(rp, buf, MAXLINE);
+    printf("%s", buf);
+  }
+  return;
+}
+
+/*
+TINY assumes that the hone directory for static content is its current directory and that the home directory for executables is ./cgi-bin.
+Any URI that contains the string cgi-bun is assumed to denote a request for dynamic content. The default filename is ./home.html. */
+
+int parse_uri(char *uri, char *filename, char *cgiargs)
+{
+  char *ptr;
+  
+  if (!strstr(uri, "cgi-bin")) { // the request is for static content
+    strcpy(cgiargs, ""); // clear the CGI argument string
+    strcpy(filename, "."); // 파일 이름 변경: URI를 relative Linux pathname으로! ex)./index.html처럼.
+    strcat(filename, uri);
+    if (uri[strlen(uri)-1] == "/") //만약 URI가 /로 끝나면:
+      strcat(filename, "home.html"); // default filename인 home을 붙인다.
+    return 1;
+  }
+
+  else { // request가 dynamic content에 대한 요청일 때: CGI argument를 추출한 다음 남아있는 URI 부분을 relative Linux filename으로 바꾼다.
+    ptr = index(uri, "?");
+    if (ptr) {
+      strcpy(cgiargs, ptr+1);
+      *ptr = "\0";
+    }
+    else {
+      strcpy(cgiargs, "");
+    }
+    strcpy(filename, ".");
+    strcat(filename, uri);
+    return 0;
+  }
+}
+
+/*
+serve_static 함수는 HTTP response를 전송 => 로컬 파일의 콘텐츠를 바디에 실어서.
+*/
+void serve_static(int fd, char *filename, int filesize)
+{
+  int srcfd;
+  char *srcp, filetype[MAXLINE], buf[MAXBUF];
+
+  /* Send response headers to client */
+  get_filetype(filename, filetype); //1. file type을 결정 => 파일 이름의 접미사를 조사
+  sprintf(buf, "HTTP/1.0 200 OK\r\n"); // send the response line & response header to the client
+  sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+  sprintf(buf, "%sConnection: close\r\n", buf);
+  sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
+  sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+  Rio_writen(fd, buf, strlen(buf));
+  printf("Response headers:\n");
+  printf("%s", buf); // blank line: 헤더 종료를 뜻함.
+
+  /* Send response body to client */
+  srcfd = Open(filename, O_RDONLY, 0); // filename을 읽기 위해 오픈 
+  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // Mmap func: requested file을 가상 메모리 영역과 매핑.
+
+  /* mmap func:
+  mmap은 파일 srcfd의 첫번쨰 filesize 바이트를 private read-only area of virtual memory와 매핑!
+  가상 메모리는 scrp 주소에서 시작.
+  */
+  Close(srcfd); // 일단 파일과 메모리를 매핑해놓으면 더이상 디스크립터를 필요로하지 않으니 fd를 닫아.
+  Rio_writen(fd, srcp, filesize); // rio_writen: srcp 위치에서 시작하는 filesize byte를 복사. (이 byte는 요청한 파일과 매핑.) -> 클라이언트의 connected descriptor.
+  Munmap(srcp, filesize); // free the mapped virtual memory area. 메모리 릭을 피하기 위해 매우 중요!
+}
+
+/*
+get_filetype - Derive file type from filename
+*/
+
+void get_filetype(char *filename, char *filetype)
+{
+
+  if (strstr(filename, ".html"))
+    strcpy(filetype, "text/html");
+  else if (strstr(filename, ".gif"))
+    strcpy(filetype, "image/gif");
+  else if (strstr(filename, ".png"))
+    strcpy(filetype, "image/png");
+  else if (strstr(filename, ".jpg"))
+    strcpy(filetype, "image/jpeg");
+  else
+    strcpy(filetype, "text/plain");
+}
+
+
+/*
+TINY는 어떤 유형의 dynamic contentems forking a child process를 통해 서빙.
+그리고 CGI program을 작동시켜 => the context of the child.
+
+serve_dynamic func: 클라이언트에게 success를 알리는 response line을 보내면서 시작.
+CGI program은 response의 나머지를 보내야 할 책임이 있음.
+
+이는 우리가 생각한 만큼 robust하지는 않은데, 왜냐면 이는 CGI 프로그램이 에러를 맞닥뜨릴 가능성을 허락하지 X?
+
+
+*/
+void serve_dynamic(int fd, char*filename, char *cgiargs)
+{
+  char buf[MAXLINE], *emptylist[] = {NULL};
+
+  /* Return fitst part of HTTP response */
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Server: Tiny Web Server\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+
+  if (Fork() == 0) { /* Child: response의 첫 파트를 보내고 나면, 새로운 child process를 포크*/
+  /* Real server would set all CGI vars here */
+  setenv("QUERY_STRING", cgiargs, 1); // Child는 request URI로부터 CGI argument와 함께 QUERY_STRING 환경 변수를 초기화
+  Dup2(fd, STDOUT_FILENO); /* Redirect stdout to client */
+  Execve(filename, emptylist,environ); /* Run CGI program */
+  }
+  Wait(NULL); /* Parent waits for and reaps child */
+}./샤ㅜ
