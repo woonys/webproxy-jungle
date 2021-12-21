@@ -72,7 +72,7 @@ void doit(int fd) // doit func은 HTTP transaction을 다룬다.
   /* 3. distinguish the request is static or dynamic */
   if (is_static) { /* Serve static content */
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
-      clienterror(fd, filename, "403", "Forbidden", "Tiny cound't read the file");
+      clienterror(fd, filename, "403", "Forbidden", "Tiny could't read the file");
       return;
     }
     serve_static(fd, filename, sbuf.st_size);
@@ -96,7 +96,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
   sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
   sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
-  sprintf(body, "s<hr><em>The Tiny Web server</em?\r\n", body);
+  sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
 
   /* Print the HTTP response */
   sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
@@ -132,8 +132,11 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
     strcpy(cgiargs, ""); // clear the CGI argument string
     strcpy(filename, "."); // 파일 이름 변경: URI를 relative Linux pathname으로! ex)./index.html처럼.
     strcat(filename, uri);
-    if (uri[strlen(uri)-1] == "/") //만약 URI가 /로 끝나면:
+    write(1, "check", sizeof("check"));
+    if (uri[strlen(uri)-1] == '/') //만약 URI가 /로 끝나면: => 여기서 문자 하나에 큰 따옴표 붙이면 NULL로 인식해서 에러!
+    {
       strcat(filename, "home.html"); // default filename인 home을 붙인다.
+    }
     return 1;
   }
 
@@ -173,7 +176,10 @@ void serve_static(int fd, char *filename, int filesize)
 
   /* Send response body to client */
   srcfd = Open(filename, O_RDONLY, 0); // filename을 읽기 위해 오픈 
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // Mmap func: requested file을 가상 메모리 영역과 매핑.
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // Mmap func: requested file을 가상 메모리 영역과 매핑.
+  srcp = (char *)Malloc(filesize);
+  Rio_readn(srcfd, srcp, filesize); // rio_readn
+
 
   /* mmap func:
   mmap은 파일 srcfd의 첫번쨰 filesize 바이트를 private read-only area of virtual memory와 매핑!
@@ -181,7 +187,8 @@ void serve_static(int fd, char *filename, int filesize)
   */
   Close(srcfd); // 일단 파일과 메모리를 매핑해놓으면 더이상 디스크립터를 필요로하지 않으니 fd를 닫아.
   Rio_writen(fd, srcp, filesize); // rio_writen: srcp 위치에서 시작하는 filesize byte를 복사. (이 byte는 요청한 파일과 매핑.) -> 클라이언트의 connected descriptor.
-  Munmap(srcp, filesize); // free the mapped virtual memory area. 메모리 릭을 피하기 위해 매우 중요!
+  // Munmap(srcp, filesize); // free the mapped virtual memory area. 메모리 릭을 피하기 위해 매우 중요!
+  free(srcp);
 }
 
 /*
@@ -199,6 +206,8 @@ void get_filetype(char *filename, char *filetype)
     strcpy(filetype, "image/png");
   else if (strstr(filename, ".jpg"))
     strcpy(filetype, "image/jpeg");
+  else if (strstr(filename, ".mp4"))
+    strcpy(filetype, "video/mp4");
   else
     strcpy(filetype, "text/plain");
 }
@@ -232,4 +241,4 @@ void serve_dynamic(int fd, char*filename, char *cgiargs)
   Execve(filename, emptylist,environ); /* Run CGI program */
   }
   Wait(NULL); /* Parent waits for and reaps child */
-}./샤ㅜ
+}
